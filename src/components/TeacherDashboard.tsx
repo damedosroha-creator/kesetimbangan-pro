@@ -16,6 +16,12 @@ import type {
   TeacherQuestionFull,
 } from '../types/assessment';
 import { formatScore } from '../utils/scoring';
+import {
+  buildCsvContent,
+  loadTeacherDashboardLocal,
+  LOCAL_TEACHER_TOKEN,
+  verifyTeacherPasswordLocal,
+} from '../utils/localFallback';
 import { FreeBodyDiagram } from './FreeBodyDiagram';
 import { MathText } from './MathText';
 import { MrJoVoiceControl } from './MrJoVoiceControl';
@@ -49,32 +55,62 @@ export const TeacherAuthModal: React.FC<TeacherAuthModalProps> = ({
     }
     setLoading(true);
     setError('');
+
+    const tryLocalFallback = async () => {
+      const valid = await verifyTeacherPasswordLocal(password);
+      if (!valid) {
+        setError('Password Mode Guru salah. Akses ditolak.');
+        return;
+      }
+      const localDash = await loadTeacherDashboardLocal();
+      onSuccess(LOCAL_TEACHER_TOKEN, localDash);
+    };
+
     try {
       const loginRes = await fetch('/api/teacher/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
       });
+
+      const contentType = loginRes.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+
+      // On static hosting (e.g. Vercel without backend functions), /api/* returns 404/405/HTML
+      if (!isJson || loginRes.status === 404 || loginRes.status === 405 || loginRes.status >= 500) {
+        await tryLocalFallback();
+        return;
+      }
+
       const loginData = await loginRes.json();
       if (!loginRes.ok || !loginData.token) {
-        setError(loginData.error || 'Password salah.');
-        setLoading(false);
+        setError(loginData.error || 'Password Mode Guru salah. Akses ditolak.');
         return;
       }
 
       const dashRes = await fetch('/api/teacher/dashboard', {
         headers: { Authorization: `Bearer ${loginData.token}` },
       });
+      const dashType = dashRes.headers.get('content-type') || '';
+      if (!dashType.includes('application/json') || dashRes.status === 404) {
+        await tryLocalFallback();
+        return;
+      }
+
       const dashData = await dashRes.json();
       if (!dashRes.ok) {
         setError(dashData.error || 'Gagal memuat data Mode Guru.');
-        setLoading(false);
         return;
       }
 
       onSuccess(loginData.token, dashData);
     } catch {
-      setError('Tidak dapat terhubung ke server untuk memverifikasi password.');
+      // Network/server unreachable -> fall back cleanly to local mode (e.g. Vercel static deploy)
+      try {
+        await tryLocalFallback();
+      } catch {
+        setError('Gagal membuka Mode Guru secara lokal.');
+      }
     } finally {
       setLoading(false);
     }
@@ -217,27 +253,43 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     ].join(' ');
   }, [activeQuestion]);
 
+  const triggerCsvDownload = (blob: Blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'hasil-penilaian-fisika-mr-jo.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const handleExportCsv = async () => {
     setExportError('');
+    if (token === LOCAL_TEACHER_TOKEN) {
+      const csv = buildCsvContent(submissions);
+      triggerCsvDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+      return;
+    }
+
     try {
       const res = await fetch('/api/teacher/export.csv', {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
-        setExportError('Gagal mengekspor data CSV.');
+        const csv = buildCsvContent(submissions);
+        triggerCsvDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
         return;
       }
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'hasil-penilaian-fisika-mr-jo.csv';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      triggerCsvDownload(blob);
     } catch {
-      setExportError('Terjadi kendala saat mengunduh CSV.');
+      try {
+        const csv = buildCsvContent(submissions);
+        triggerCsvDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+      } catch {
+        setExportError('Terjadi kendala saat mengunduh CSV.');
+      }
     }
   };
 

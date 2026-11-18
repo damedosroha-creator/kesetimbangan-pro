@@ -4,6 +4,10 @@ import { InstructionsView } from './components/InstructionsView';
 import { LoginView } from './components/LoginView';
 import { ResultView } from './components/ResultView';
 import { TeacherAuthModal, TeacherDashboard } from './components/TeacherDashboard';
+import {
+  LOCAL_TEACHER_TOKEN,
+  submitAssessmentLocal,
+} from './utils/localFallback';
 import type {
   StudentAnswersMap,
   SubmissionRecordFull,
@@ -73,6 +77,18 @@ export default function App() {
   const handleSubmitExam = async () => {
     setIsSubmitting(true);
     setSubmitError('');
+
+    const runLocalSubmit = async () => {
+      const localResult = await submitAssessmentLocal({
+        studentName,
+        studentClass,
+        answers,
+      });
+      setSubmissionResult(localResult);
+      setStage('result');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
     try {
       const res = await fetch('/api/submit', {
         method: 'POST',
@@ -83,17 +99,29 @@ export default function App() {
           answers,
         }),
       });
+
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+
+      if (!isJson || res.status === 404 || res.status === 405 || res.status >= 500) {
+        await runLocalSubmit();
+        return;
+      }
+
       const data = await res.json();
       if (!res.ok) {
         setSubmitError(data.error || 'Gagal mengumpulkan jawaban.');
-        setIsSubmitting(false);
         return;
       }
       setSubmissionResult(data as SubmissionResultPublic);
       setStage('result');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch {
-      setSubmitError('Gagal menghubungi server saat mengumpulkan jawaban.');
+      try {
+        await runLocalSubmit();
+      } catch {
+        setSubmitError('Gagal memproses pengumpulan jawaban.');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -132,7 +160,7 @@ export default function App() {
   };
 
   const handleExitTeacherMode = async () => {
-    if (teacherSession?.token) {
+    if (teacherSession?.token && teacherSession.token !== LOCAL_TEACHER_TOKEN) {
       try {
         await fetch('/api/teacher/logout', {
           method: 'POST',
