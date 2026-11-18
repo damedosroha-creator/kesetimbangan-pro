@@ -1,0 +1,6 @@
+{
+  "name": "PHYSICS ASSESSMENT – DYNAMICS OF ROTATION",
+  "description": "Sistem Penilaian Fisika SMA Materi Dinamika Rotasi dan Kesetimbangan Benda Tegar oleh MR JO.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
